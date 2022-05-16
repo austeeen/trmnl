@@ -16,6 +16,12 @@ const std::string logo =
 const int logo_w = 41;
 const int logo_h = 3;
 const int logo_p = logo_w * 2 + logo_h * 2;
+
+const int UP = 0;
+const int DOWN = 1;
+const int LEFT = 2;
+const int RIGHT = 3;
+
 const int DIST_NEAR = 10;
 const int DIST_CLOSE = 5;
 
@@ -23,6 +29,8 @@ const int IS_FAR = 0x0;
 const int IS_NEAR = 0x1;
 const int IS_CLOSE = 0x2;
 
+const int PPM = 25;
+const int PT_MOD = 10;
 
 class msgbox
 {
@@ -91,18 +99,45 @@ struct mine
     }
 };
 
+struct player
+{
+    int x, y, chr, dst;
+
+    player(): chr(ACS_BLOCK), dst(A_NORMAL) {}
+
+    void reset(int _x, int _y) {
+        x = _x;
+        y = _y;
+        dst = A_NORMAL;
+    }
+
+    void update(WINDOW * fld) {
+        wmove(fld, y, x);
+    }
+
+    void lateupdate(int mdst) {
+        if (mdst & IS_CLOSE) {
+            dst = A_BLINK;
+        } else if (mdst & IS_NEAR) {
+            dst = A_BOLD;
+        } else {
+            dst = A_NORMAL;
+        }
+    }
+
+    void draw(WINDOW * fld) {
+        waddch(fld, chr | dst);
+    }
+};
 
 class MineField
 {
 public:
-    MineField(): hide_target(true), fw(COLS - 2), fh(LINES - 3)
+    MineField(int fw, int fh): hide_target(true), fw(fw), fh(fh)
     {
         fld = newwin(fh, fw, 1, 1);
         sx = fw / 2;
         sy = fh / 2;
-        mx = sx;
-        my = sy;
-        mchr = A_NORMAL;
     }
 
     ~MineField() {
@@ -120,17 +155,16 @@ public:
         for (int i = 0; i < tmines; i ++) {
             seed = mines[i].create(seed, fw, fh);
         }
+        resetplayer();
     }
 
     void resetplayer() {
-        mx = sx;
-        my = sy;
-        mchr = A_NORMAL;
-        setplayer();
+        plyr.reset(sx, sy);
+        setcursor();
     }
 
-    void setplayer() {
-        wmove(fld, my, mx);
+    void setcursor() {
+        wmove(fld, plyr.y, plyr.x);
         wrefresh(fld);
     }
 
@@ -147,62 +181,35 @@ public:
         tmines_ = tmines;
     }
 
-    void update() {
-        waddch(fld, ACS_BLOCK | mchr);
-        setplayer();
-        int mdist = 0;
-        for (int i = 0; i < tmines; i ++) {
-            mdist |= mines[i].check(mx, my);
+    int move(int dir)
+    {
+        switch(dir) {
+            case UP: {
+                if (plyr.y > 1) plyr.y --;
+                break;
+            }
+            case DOWN: {
+                if (plyr.y < fh - 2) plyr.y ++;
+                break;
+            }
+            case LEFT: {
+                if (plyr.x > 1) plyr.x --;
+                break;
+            }
+            case RIGHT: {
+                if (plyr.x < fw - 2) plyr.x ++;
+                break;
+            }
+            default: return 0;
         }
-        if (mdist & IS_CLOSE) {
-            mchr = A_BLINK;
-        } else if (mdist & IS_NEAR) {
-            mchr = A_BOLD;
-        } else {
-            mchr = A_NORMAL;
-        }
-    }
-
-    int move_u() {
-        if (my > 1) {
-            my --;
-            update();
-            return 1;
-        }
-        return 0;
-    }
-
-    int move_d() {
-        if (my < fh - 2) {
-            my ++;
-            update();
-            return 1;
-        }
-        return 0;
-    }
-
-    int move_l() {
-        if (mx > 1) {
-            mx --;
-            update();
-            return 1;
-        }
-        return 0;
-    }
-
-    int move_r() {
-        if (mx < fw - 2) {
-            mx ++;
-            update();
-            return 1;
-        }
-        return 0;
+        update();
+        return 1;
     }
 
     bool fire() {
         bool hit = false;
         for (int i = 0; i < tmines; i ++) {
-            if (mines[i].trydefuse(mx, my)) {
+            if (mines[i].trydefuse(plyr.x, plyr.y)) {
                 nmines ++;
                 hit = true;
                 flash();
@@ -222,20 +229,38 @@ public:
                 mvwaddch(fld, mines[i].y, mines[i].x, ' ');
             }
         }
-        setplayer();
+        setcursor();
+    }
+
+    void update() {
+        plyr.update(fld);
+        int mdist = 0;
+        for (int i = 0; i < tmines; i ++) {
+            mdist |= mines[i].check(plyr.x, plyr.y);
+        }
+        plyr.lateupdate(mdist);
+    }
+
+    void draw() {
+        plyr.draw(fld);
+        wrefresh(fld);
     }
 
 private:
     WINDOW * fld;
     bool hide_target;
-    int nmines, tmines, sx, sy, mx, my, mchr, fw, fh;
+    int nmines, tmines, sx, sy, fw, fh;
+    player plyr;
     mine * mines;
 };
 
 
 struct hud
 {
-    hud(): score(0), steps(0), mines_defused(0), total_mines(0)
+    hud(int area): fld_area(area),
+    pts(0.0), score(0.0),
+    mines_defused(0), total_mines(0),
+    steps(0), cur_lvl(0)
     {
         hd = newwin(1, COLS - 2, LINES - 2, 1);
     }
@@ -244,38 +269,54 @@ struct hud
         delwin(hd);
     }
 
-    void setscore() {
+    void updatepts() {
         if (steps) {
-            score += (mines_defused * 250) / steps;
+            double r = fld_area / steps;
+            int ppm = mines_defused * (PPM + (PT_MOD * cur_lvl));
+            pts = ppm * r;
         }
     }
 
-    void update(int _steps, int _defused, int _total)
-    {
-        steps = _steps;
+    void updatemines(int _defused, int _total) {
         mines_defused = _defused;
         total_mines = _total;
+        updatepts();
     }
 
-    void reset() {
+    void updatesteps(int _steps) {
+        steps = _steps;
+    }
+
+    void newlevel(int _lvl, int _tmines) {
+        cur_lvl = _lvl;
+        total_mines = _tmines;
+        steps = 0;
+        mines_defused = 0;
+        score += pts;
+        pts = 0;
         wclear(hd);
     }
 
-    void draw()
-    {
-        mvwprintw(hd, 0, 0, hud_txt, score, mines_defused, total_mines, steps);
+    void draw() {
+        int rscore = (int) score + pts;
+        mvwprintw(hd, 0, 0, hud_txt, rscore, mines_defused, total_mines, steps, cur_lvl);
         wrefresh(hd);
     }
 
-    int x, y, w, h, score, steps, mines_defused, total_mines;
-    const char* hud_txt = "score[%d] (%d:%d) %d";
+    double score, pts;
+    int fld_area;
+    int mines_defused, total_mines;
+    int steps, cur_lvl;
+
+    const char* hud_txt = "score[%d] mines[%d:%d] steps[%d] lvl[%d]";
     WINDOW *hd;
 };
 
 class MinesGame
 {
 public:
-    MinesGame(): score(0), steps(0), nmines(0), tmines(0)
+    MinesGame(): fldw(COLS - 2), fldh(LINES - 3), flda(fldw * fldh),
+    lvl(0), steps(0), nmines(0), tmines(0)
     {}
 
     ~MinesGame() {
@@ -313,17 +354,16 @@ public:
         bool running = true;
         while (running)
         {
-            mf->setplayer();
+            mf->setcursor();
             switch (getch()) {
-                case 'w': { steps += mf->move_u(); break; }
-                case 's': { steps += mf->move_d(); break; }
-                case 'a': { steps += mf->move_l(); break; }
-                case 'd': { steps += mf->move_r(); break; }
+                case 'w': { steps += mf->move(UP); break; }
+                case 's': { steps += mf->move(DOWN); break; }
+                case 'a': { steps += mf->move(LEFT); break; }
+                case 'd': { steps += mf->move(RIGHT); break; }
                 case 'f': {
                     if(mf->fire()) {
                         mf->status(nmines, tmines);
-                        hd->update(steps, nmines, tmines);
-                        hd->setscore();
+                        hd->updatemines(nmines, tmines);
                     }
                     break;
                 }
@@ -336,9 +376,8 @@ public:
                 }
                 case 'q': { running = false; break; }
             }
-            hd->update(steps, nmines, tmines);
-            hd->draw();
-            refresh();
+            update();
+            draw();
             if (nmines == tmines) {
                 nextlevel();
             }
@@ -349,31 +388,44 @@ public:
         border(0, 0, 0, 0, 0, 0, 0, 0);
         move(0, (int) COLS / 3);
         addstr(":|mines|:");
-        hd = new hud();
+        hd = new hud(flda);
     }
 
     void nextlevel() {
         msgbox mb("field clear");
         getch();
         delete mf;
+        lvl++;
         newlevel();
     }
 
     void newlevel() {
-        mf = new MineField();
+        mf = new MineField(fldw, fldh);
         mf->create();
         steps = 0;
         mf->status(nmines, tmines);
-        hd->update(steps, nmines, tmines);
-        hd->reset();
+        hd->newlevel(lvl, tmines);
         hd->draw();
         mf->drawborder();
-        mf->setplayer();
+        mf->resetplayer();
+        refresh();
+    }
+
+    void update() {
+        mf->update();
+        hd->updatesteps(steps);
+        hd->updatepts();
+    }
+
+    void draw() {
+        mf->draw();
+        hd->draw();
         refresh();
     }
 
 private:
-    int score, steps, nmines, tmines;
+    int fldw, fldh, flda;
+    int lvl, steps, nmines, tmines;
     MineField *mf;
     hud* hd;
 };
