@@ -22,12 +22,23 @@ const int DOWN = 1;
 const int LEFT = 2;
 const int RIGHT = 3;
 
-const int DIST_NEAR = 10;
-const int DIST_CLOSE = 5;
+const char PLYR_CHAR = 'O';
 
-const int IS_FAR = 0x0;
-const int IS_NEAR = 0x1;
-const int IS_CLOSE = 0x2;
+struct proximity {
+    const int bit, chr, dist;
+    bool check(const int dx, const int dy) const {
+        return dist ? dx <= dist && dy <= dist : true;
+    }
+};
+
+const int NPRX = 4;
+const proximity ALL_PRX[NPRX] = {
+    {0x1 << 1, A_BLINK,    5},
+    {0x1 << 2, A_STANDOUT, 10},
+    {0x1 << 3, A_BOLD,     20},
+    {0x1 << 0, A_NORMAL,   0},
+};
+const int NOPRX = 3;
 
 const int PPM = 25;
 const int PT_MOD = 10;
@@ -79,14 +90,12 @@ struct mine
         if (isdefused) {
             return 0;
         }
-
-        if (abs(px - x) < DIST_CLOSE && abs(py - y) < DIST_CLOSE) {
-            return IS_CLOSE;
+        for (int i = 0; i < NPRX; i ++) {
+            if (ALL_PRX[i].check(abs(px - x), abs(py - y))) {
+                return ALL_PRX[i].bit;
+            }
         }
-        else if (abs(px - x) < DIST_NEAR && abs(py - y) < DIST_NEAR) {
-            return IS_NEAR;
-        }
-        return IS_FAR;
+        return 0;
     }
 
     bool trydefuse(int px, int py)
@@ -101,14 +110,14 @@ struct mine
 
 struct player
 {
-    int x, y, chr, dst;
+    int x, y, dst;
 
-    player(): chr(ACS_BLOCK), dst(A_NORMAL) {}
+    player(): dst(ALL_PRX[NOPRX].chr) {}
 
     void reset(int _x, int _y) {
         x = _x;
         y = _y;
-        dst = A_NORMAL;
+        dst = ALL_PRX[NOPRX].chr;
     }
 
     void update(WINDOW * fld) {
@@ -116,17 +125,16 @@ struct player
     }
 
     void lateupdate(int mdst) {
-        if (mdst & IS_CLOSE) {
-            dst = A_BLINK;
-        } else if (mdst & IS_NEAR) {
-            dst = A_BOLD;
-        } else {
-            dst = A_NORMAL;
+        for (int i = 0; i < NPRX; i ++) {
+            if (mdst & ALL_PRX[i].bit) {
+                dst = ALL_PRX[i].chr;
+                break;
+            }
         }
     }
 
     void draw(WINDOW * fld) {
-        waddch(fld, chr | dst);
+        waddch(fld, PLYR_CHAR | dst);
     }
 };
 
@@ -184,22 +192,10 @@ public:
     int move(int dir)
     {
         switch(dir) {
-            case UP: {
-                if (plyr.y > 1) plyr.y --;
-                break;
-            }
-            case DOWN: {
-                if (plyr.y < fh - 2) plyr.y ++;
-                break;
-            }
-            case LEFT: {
-                if (plyr.x > 1) plyr.x --;
-                break;
-            }
-            case RIGHT: {
-                if (plyr.x < fw - 2) plyr.x ++;
-                break;
-            }
+            case UP: if (plyr.y > 1) plyr.y --; break;
+            case DOWN: if (plyr.y < fh - 2) plyr.y ++; break;
+            case LEFT: if (plyr.x > 1) plyr.x --; break;
+            case RIGHT:  if (plyr.x < fw - 2) plyr.x ++; break;
             default: return 0;
         }
         update();
