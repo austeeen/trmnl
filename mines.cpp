@@ -318,8 +318,6 @@ struct banner
 
 struct hud
 {
-    int fld_area;
-
     const char* hud_txt = "[wasd] move | [f]ire | [q]uit | [r]eset | [c]heat";
     WINDOW *hd;
 

@@ -27,3 +27,8 @@
 *.exe
 *.out
 *.app
+
+mines
+.idea
+*.egg-info
+*.pyc
