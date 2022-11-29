@@ -10,10 +10,11 @@
 // g++ mines.cpp -lncurses
 
 const std::string logo =
-    "  //| //||  ||  ||\\\\  |  ||---||  \\\\---||"
-    " // |// ||  ||  || \\\\ |  ||-||       \\\\  "
-    "//      ||  ||  ||  \\\\|  ||---||  ||---\\\\";
-const int logo_w = 41;
+    "  //| //||  ||  ||\\\\  |  ||---||"
+    " // |// ||  ||  || \\\\ |  ||-||  "
+    "//      ||  ||  ||  \\\\|  ||---||";
+
+const int logo_w = 32;
 const int logo_h = 3;
 const int logo_p = logo_w * 2 + logo_h * 2;
 
@@ -22,7 +23,7 @@ const int DOWN = 1;
 const int LEFT = 2;
 const int RIGHT = 3;
 
-const char PLYR_CHAR = 'O';
+const char PLYR_CHAR = 'X';
 
 struct proximity {
     const int bit, chr, dist;
@@ -31,8 +32,10 @@ struct proximity {
     }
 };
 
-const int NPRX = 4;
-const proximity ALL_PRX[NPRX] = {
+// not all of these are supported by terminals... regular chars may be better
+// 4 proximity types
+const int NUM_PRX = 4;
+const proximity ALL_PRX[NUM_PRX] = {
     {0x1 << 1, A_BLINK,    5},
     {0x1 << 2, A_STANDOUT, 10},
     {0x1 << 3, A_BOLD,     20},
@@ -40,7 +43,9 @@ const proximity ALL_PRX[NPRX] = {
 };
 const int NOPRX = 3;
 
+// points per mine
 const int PPM = 25;
+// point modifier
 const int PT_MOD = 10;
 
 class msgbox
@@ -90,7 +95,7 @@ struct mine
         if (isdefused) {
             return 0;
         }
-        for (int i = 0; i < NPRX; i ++) {
+        for (int i = 0; i < NUM_PRX; i ++) {
             if (ALL_PRX[i].check(abs(px - x), abs(py - y))) {
                 return ALL_PRX[i].bit;
             }
@@ -110,14 +115,14 @@ struct mine
 
 struct player
 {
-    int x, y, dst;
+    int x, y, trail;
 
-    player(): dst(ALL_PRX[NOPRX].chr) {}
+    player(): trail(ALL_PRX[NOPRX].chr) {}
 
     void reset(int _x, int _y) {
         x = _x;
         y = _y;
-        dst = ALL_PRX[NOPRX].chr;
+        trail = ALL_PRX[NOPRX].chr;
     }
 
     void update(WINDOW * fld) {
@@ -125,16 +130,16 @@ struct player
     }
 
     void lateupdate(int mdst) {
-        for (int i = 0; i < NPRX; i ++) {
+        for (int i = 0; i < NUM_PRX; i ++) {
             if (mdst & ALL_PRX[i].bit) {
-                dst = ALL_PRX[i].chr;
+                trail = ALL_PRX[i].chr;
                 break;
             }
         }
     }
 
     void draw(WINDOW * fld) {
-        waddch(fld, PLYR_CHAR | dst);
+        waddch(fld, PLYR_CHAR | trail);
     }
 };
 
@@ -143,7 +148,7 @@ class MineField
 public:
     MineField(int fw, int fh): hide_target(true), fw(fw), fh(fh)
     {
-        fld = newwin(fh, fw, 1, 1);
+        fld = newwin(fh, fw, 2, 1);
         sx = fw / 2;
         sy = fh / 2;
     }
@@ -250,19 +255,30 @@ private:
     mine * mines;
 };
 
-
-struct hud
+struct banner
 {
-    hud(int area): fld_area(area),
-    pts(0.0), score(0.0),
-    mines_defused(0), total_mines(0),
-    steps(0), cur_lvl(0)
+    double score, pts;
+    int fld_area;
+    int mines_defused, total_mines;
+    int steps, cur_lvl;
+
+    const char* bnr_txt = "score[%d] mines[%d:%d] steps[%d] lvl[%d]";
+    WINDOW *bnr;
+
+    banner(int area):
+        score(0.0),
+        pts(0.0),
+        fld_area(area),
+        mines_defused(0),
+        total_mines(0),
+        steps(0),
+        cur_lvl(0)
     {
-        hd = newwin(1, COLS - 2, LINES - 2, 1);
+        bnr = newwin(1, COLS - 2, 1, 1);
     }
 
-    ~hud() {
-        delwin(hd);
+    ~banner() {
+        delwin(bnr);
     }
 
     void updatepts() {
@@ -290,33 +306,49 @@ struct hud
         mines_defused = 0;
         score += pts;
         pts = 0;
-        wclear(hd);
+        wclear(bnr);
     }
 
     void draw() {
         int rscore = (int) score + pts;
-        mvwprintw(hd, 0, 0, hud_txt, rscore, mines_defused, total_mines, steps, cur_lvl);
+        mvwprintw(bnr, 0, 0, bnr_txt, rscore, mines_defused, total_mines, steps, cur_lvl);
+        wrefresh(bnr);
+    }
+};
+
+struct hud
+{
+    int fld_area;
+
+    const char* hud_txt = "[wasd] move | [f]ire | [q]uit | [r]eset | [c]heat";
+    WINDOW *hd;
+
+    hud() { hd = newwin(1, COLS - 2, LINES - 2, 1); }
+    ~hud() { delwin(hd); }
+
+    void draw() {
+        mvwaddstr(hd, 0, 0, hud_txt);
         wrefresh(hd);
     }
-
-    double score, pts;
-    int fld_area;
-    int mines_defused, total_mines;
-    int steps, cur_lvl;
-
-    const char* hud_txt = "score[%d] mines[%d:%d] steps[%d] lvl[%d]";
-    WINDOW *hd;
 };
 
 class MinesGame
 {
 public:
-    MinesGame(): fldw(COLS - 2), fldh(LINES - 3), flda(fldw * fldh),
-    lvl(0), steps(0), nmines(0), tmines(0)
+    MinesGame():
+        fldw(COLS - 2),
+        fldh(LINES - 4),
+        flda(fldw * fldh),
+        lvl(0),
+        steps(0),
+        nmines(0),
+        tmines(0),
+        hd(new hud())
     {}
 
     ~MinesGame() {
         delete mf;
+        delete bnr;
         delete hd;
     }
 
@@ -337,7 +369,7 @@ public:
             y2 = j / logo_w;
             mvaddch(sy + y2, sx + x2, logo[j]);
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
             refresh();
         }
         move(0, 0);
@@ -359,7 +391,7 @@ public:
                 case 'f': {
                     if(mf->fire()) {
                         mf->status(nmines, tmines);
-                        hd->updatemines(nmines, tmines);
+                        bnr->updatemines(nmines, tmines);
                     }
                     break;
                 }
@@ -382,9 +414,10 @@ public:
 
     void newgame() {
         border(0, 0, 0, 0, 0, 0, 0, 0);
-        move(0, (int) COLS / 3);
+        move(0, (int) COLS / 2);
         addstr(":|mines|:");
-        hd = new hud(flda);
+        bnr = new banner(flda);
+        hd->draw();
     }
 
     void nextlevel() {
@@ -400,8 +433,8 @@ public:
         mf->create();
         steps = 0;
         mf->status(nmines, tmines);
-        hd->newlevel(lvl, tmines);
-        hd->draw();
+        bnr->newlevel(lvl, tmines);
+        bnr->draw();
         mf->drawborder();
         mf->resetplayer();
         refresh();
@@ -409,13 +442,14 @@ public:
 
     void update() {
         mf->update();
-        hd->updatesteps(steps);
-        hd->updatepts();
+        bnr->updatesteps(steps);
+        bnr->updatepts();
     }
 
     void draw() {
         mf->draw();
         hd->draw();
+        bnr->draw();
         refresh();
     }
 
@@ -423,6 +457,7 @@ private:
     int fldw, fldh, flda;
     int lvl, steps, nmines, tmines;
     MineField *mf;
+    banner* bnr;
     hud* hd;
 };
 
